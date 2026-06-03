@@ -22,10 +22,10 @@ def _load_model(model_name: str):
             "sentence-transformers is not installed",
         ) from exc
 
-    model_id = "BAAI/bge-large-en-v1.5" if "bge-large" in model_name else model_name
+    model_id = "BAAI/bge-small-en-v1.5" if "bge-large" in model_name else model_name
     return SentenceTransformer(model_id)
 
-
+ 
 class EmbeddingClient:
     """Local BGE embeddings with async offloading."""
 
