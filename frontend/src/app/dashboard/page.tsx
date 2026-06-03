@@ -52,9 +52,11 @@ function DashboardContent() {
   useEffect(() => {
     if (!creatorId || sessionId) return;
 
+    const id = creatorId;
+
     async function initSession() {
       try {
-        const session = await api.createChatSession(creatorId, "Shorts vs Reels Chat");
+        const session = await api.createChatSession(id, "Shorts vs Reels Chat");
         setComparison((prev) => {
           if (!prev) return prev;
           const next = { ...prev, sessionId: session.id };

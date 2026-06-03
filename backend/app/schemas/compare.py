@@ -41,7 +41,7 @@ class VideoPlatformSummary(SchemaBase):
     comments: int | None
     upload_date: str | None
     hashtags: list[str]
-    engagement_rate: float
+    engagement_rate: float | None = None
     transcript_preview: str | None = None
 
 

@@ -20,9 +20,13 @@ export async function GET(
       return new Response("Stream unavailable", { status: response.status });
     }
 
-    return new Response(response.body, {
+    // Passthrough without buffering the full body (fixes stuck SSE in Next.js proxy).
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+    void response.body.pipeTo(writable);
+
+    return new Response(readable, {
       headers: {
-        "Content-Type": "text/event-stream",
+        "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
         "X-Accel-Buffering": "no",

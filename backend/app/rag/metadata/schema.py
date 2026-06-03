@@ -4,7 +4,9 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.domain.media import normalize_duration_sec
 
 METADATA_SCHEMA_VERSION = "1.0"
 
@@ -48,6 +50,13 @@ class ChunkMetadataPayload(BaseModel):
     embedding_model: str
     ingest_job_id: UUID | None = None
     text_preview: str | None = None
+
+    @field_validator("duration_sec", mode="before")
+    @classmethod
+    def coerce_duration_sec(cls, value: object) -> int | None:
+        if value is None or isinstance(value, int):
+            return value
+        return normalize_duration_sec(value)
 
     def to_qdrant_payload(self) -> dict:
         return self.model_dump(mode="json")

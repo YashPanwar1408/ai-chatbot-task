@@ -227,9 +227,13 @@ class VideoIngestService:
             "comments": extracted.comments,
             "upload_date": extracted.upload_date.isoformat() if extracted.upload_date else None,
             "hashtags": extracted.hashtags,
-            "engagement_rate": compute_engagement_rate(
-                extracted.views,
-                extracted.likes,
-                extracted.comments,
+            "engagement_rate": (
+                compute_engagement_rate(
+                    extracted.views,
+                    extracted.likes,
+                    extracted.comments,
+                )
+                if extracted.views
+                else None
             ),
         }

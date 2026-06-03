@@ -18,7 +18,13 @@ async def create_session(
     service: RunService = Depends(get_run_service),
 ) -> ChatSessionResponse:
     run = await service.create_chat_session(auth.org_id, body)
-    return ChatSessionResponse(id=run.id, creator_id=body.creator_id, title=body.title)
+    return ChatSessionResponse(
+        id=run.id,
+        creator_id=run.creator_id,
+        title=body.title or run.query,
+        created_at=run.created_at,
+        updated_at=run.updated_at,
+    )
 
 
 @router.post("/sessions/{session_id}/messages", response_model=ChatMessageResponse)

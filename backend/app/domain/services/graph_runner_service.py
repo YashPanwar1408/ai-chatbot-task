@@ -61,7 +61,11 @@ class GraphRunnerService:
             await self._redis.publish_stream_event(
                 run_id,
                 "done",
-                {"run_id": str(run_id), "status": run.status.value},
+                {
+                    "run_id": str(run_id),
+                    "status": run.status.value,
+                    "answer": final_state.get("draft_answer", ""),
+                },
             )
         except Exception as exc:
             run.status = AnalysisRunStatus.FAILED

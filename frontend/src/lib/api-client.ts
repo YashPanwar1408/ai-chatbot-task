@@ -72,6 +72,14 @@ export const api = {
   },
 };
 
+/** Prefer direct backend SSE when set — avoids Next.js proxy buffering. */
 export function streamRunUrl(runId: string): string {
+  const direct =
+    typeof process !== "undefined"
+      ? process.env.NEXT_PUBLIC_API_URL
+      : undefined;
+  if (direct) {
+    return `${direct.replace(/\/$/, "")}/v1/runs/${runId}/stream`;
+  }
   return `/api/runs/${runId}/stream`;
 }

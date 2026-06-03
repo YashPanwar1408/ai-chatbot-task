@@ -105,7 +105,7 @@ async def grade_documents(state: ChatGraphState) -> dict:
         score = float(chunk.get("score", 0.0))
         text = str(chunk.get("text_preview", ""))
         is_relevant = score >= _settings.retrieval_score_threshold
-        if is_relevant and _settings.google_api_key:
+        if is_relevant and _settings.google_api_key and _settings.gemini_llm_grading:
             try:
                 is_relevant = await _gemini.grade_relevance(query, text)
             except Exception:
@@ -143,17 +143,29 @@ async def generate(state: ChatGraphState) -> dict:
 
     run_id = state.get("run_id")
     tokens: list[str] = []
-    if run_id:
-        async for delta in _gemini.generate_stream(prompt, system=system):
-            tokens.append(delta)
+    try:
+        if run_id:
+            async for delta in _gemini.generate_stream(prompt, system=system):
+                tokens.append(delta)
+                await _redis.publish_stream_event(
+                    UUID(run_id),
+                    "token",
+                    {"delta": delta},
+                )
+            answer = "".join(tokens)
+        else:
+            answer = await _gemini.generate(prompt, system=system)
+    except Exception as exc:
+        if run_id:
+            from app.domain.exceptions import DomainError
+
+            message = exc.message if isinstance(exc, DomainError) else str(exc)
             await _redis.publish_stream_event(
                 UUID(run_id),
-                "token",
-                {"delta": delta},
+                "error",
+                {"message": message},
             )
-        answer = "".join(tokens)
-    else:
-        answer = await _gemini.generate(prompt, system=system)
+        raise
 
     return {
         "phase": "generate",

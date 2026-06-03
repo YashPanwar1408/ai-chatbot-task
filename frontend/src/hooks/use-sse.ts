@@ -27,11 +27,47 @@ export function useSSE() {
       close();
       const source = new EventSource(streamRunUrl(runId));
       sourceRef.current = source;
+      let finished = false;
+
+      let receivedContent = false;
+
+      const handlePayload = (eventType: StreamEventType, raw: string) => {
+        const data = JSON.parse(raw) as StreamEventPayload;
+        switch (eventType) {
+          case "status":
+            handlers.onStatus?.(data);
+            break;
+          case "token": {
+            const delta = String(data.delta ?? "");
+            if (delta) receivedContent = true;
+            handlers.onToken?.(delta);
+            break;
+          }
+          case "citation": {
+            receivedContent = true;
+            handlers.onCitation?.(data as unknown as Citation);
+            break;
+          }
+          case "metric":
+            break;
+          case "done":
+            finished = true;
+            handlers.onDone?.(data);
+            close();
+            break;
+          case "error":
+            finished = true;
+            handlers.onError?.(String(data.message ?? "Stream error"));
+            close();
+            break;
+        }
+      };
 
       const eventTypes: StreamEventType[] = [
         "status",
         "token",
         "citation",
+        "metric",
         "done",
         "error",
       ];
@@ -39,36 +75,28 @@ export function useSSE() {
       for (const eventType of eventTypes) {
         source.addEventListener(eventType, (event) => {
           try {
-            const data = JSON.parse((event as MessageEvent).data) as StreamEventPayload;
-            switch (eventType) {
-              case "status":
-                handlers.onStatus?.(data);
-                break;
-              case "token":
-                handlers.onToken?.(String(data.delta ?? ""));
-                break;
-              case "citation": {
-                const citation = data as unknown as Citation;
-                handlers.onCitation?.(citation);
-                break;
-              }
-              case "done":
-                handlers.onDone?.(data);
-                close();
-                break;
-              case "error":
-                handlers.onError?.(String(data.message ?? "Stream error"));
-                close();
-                break;
+            if (!(event instanceof MessageEvent) || typeof event.data !== "string") {
+              return;
             }
+            handlePayload(eventType, event.data);
           } catch {
-            handlers.onError?.("Failed to parse stream event");
+            if (!finished) {
+              finished = true;
+              handlers.onError?.("Failed to parse stream event");
+              close();
+            }
           }
         });
       }
 
       source.onerror = () => {
-        handlers.onError?.("Connection to stream lost");
+        if (finished) return;
+        finished = true;
+        if (!receivedContent) {
+          handlers.onError?.("Connection to stream lost");
+        } else {
+          handlers.onDone?.({});
+        }
         close();
       };
     },

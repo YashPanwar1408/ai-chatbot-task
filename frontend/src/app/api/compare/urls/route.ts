@@ -9,7 +9,16 @@ export async function POST(request: Request) {
       body: JSON.stringify(body),
     });
 
-    const data = await response.json();
+    const raw = await response.text();
+    let data: { detail?: string } = {};
+    try {
+      data = raw ? (JSON.parse(raw) as { detail?: string }) : {};
+    } catch {
+      return NextResponse.json(
+        { detail: raw.slice(0, 300) || "Invalid backend response" },
+        { status: response.status || 502 },
+      );
+    }
     if (!response.ok) {
       return NextResponse.json(
         { detail: data.detail ?? "Compare failed" },
@@ -17,7 +26,7 @@ export async function POST(request: Request) {
       );
     }
 
-    return NextResponse.json(data, { status: 201 });
+    return NextResponse.json(JSON.parse(raw), { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Backend unreachable";
     return NextResponse.json({ detail: message }, { status: 502 });

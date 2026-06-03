@@ -33,7 +33,7 @@ target_metadata = Base.metadata
 
 def get_url() -> str:
     settings = get_settings()
-    return settings.database_url_sync
+    return settings.database_url_sync  # psycopg2 + sslmode in query for Neon
 
 
 def run_migrations_offline() -> None:

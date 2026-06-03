@@ -12,7 +12,7 @@ export interface VideoPlatformSummary {
   comments: number | null;
   upload_date: string | null;
   hashtags: string[];
-  engagement_rate: number;
+  engagement_rate: number | null;
   transcript_preview?: string | null;
 }
 

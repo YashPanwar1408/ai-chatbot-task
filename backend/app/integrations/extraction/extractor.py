@@ -11,7 +11,9 @@ from urllib.parse import urlparse
 from youtube_transcript_api import YouTubeTranscriptApi
 
 from app.db.enums import Platform
+from app.config.settings import get_settings
 from app.domain.engagement import compute_engagement_rate
+from app.domain.media import normalize_duration_sec
 from app.domain.exceptions import IntegrationError, ValidationError
 from app.integrations.extraction.models import VideoExtract
 
@@ -96,15 +98,49 @@ def _fetch_youtube_transcript(video_id: str) -> tuple[str, list[dict]]:
     return " ".join(parts).strip(), normalized_segments
 
 
+def _instagram_view_count(info: dict[str, Any]) -> int | None:
+    """yt-dlp field names vary; Instagram often omits views without cookies."""
+    for key in (
+        "view_count",
+        "play_count",
+        "video_view_count",
+        "video_play_count",
+        "view_count_raw",
+        "views",
+        "plays",
+        "view",
+        "video_views",
+        "like_count",
+        "comment_count",
+        "stats",
+        "statistics",
+    ):
+        value = info.get(key)
+        if isinstance(value, dict):
+            # Sometimes stats/statistics might be a dict, check for any numeric value for views/plays
+            for subkey in ("view_count", "play_count", "views", "plays", "video_views", "video_view_count"):
+                if subkey in value:
+                    parsed = _parse_count(value[subkey])
+                    if parsed is not None:
+                        return parsed
+        parsed = _parse_count(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
 def _run_yt_dlp(url: str) -> dict[str, Any]:
     import yt_dlp
 
+    settings = get_settings()
     options: dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
         "extract_flat": False,
     }
+    if settings.instagram_cookies_file:
+        options["cookiefile"] = settings.instagram_cookies_file
     with yt_dlp.YoutubeDL(options) as ydl:
         return ydl.extract_info(url, download=False)
 
@@ -125,6 +161,8 @@ def _normalize_yt_dlp(platform: Platform, url: str, info: dict[str, Any]) -> Vid
         upload_date = datetime.strptime(str(upload_date_raw), "%Y%m%d").replace(tzinfo=UTC)
 
     views = _parse_count(info.get("view_count"))
+    if platform == Platform.INSTAGRAM:
+        views = views or _instagram_view_count(info)
     likes = _parse_count(info.get("like_count"))
     comments = _parse_count(info.get("comment_count"))
 
@@ -167,7 +205,7 @@ def _normalize_yt_dlp(platform: Platform, url: str, info: dict[str, Any]) -> Vid
         upload_date=upload_date,
         hashtags=hashtags,
         engagement_rate=engagement_rate,
-        duration_sec=info.get("duration"),
+        duration_sec=normalize_duration_sec(info.get("duration")),
         thumbnail_url=info.get("thumbnail"),
     )
 
@@ -185,7 +223,47 @@ class VideoExtractor:
         except Exception as exc:
             raise IntegrationError("yt-dlp", str(exc)) from exc
 
-        return _normalize_yt_dlp(resolved_platform, url, info)
+        extracted = _normalize_yt_dlp(resolved_platform, url, info)
+        if resolved_platform == Platform.INSTAGRAM and extracted.views is None:
+            extracted = await self._enrich_instagram_views(extracted)
+        return extracted
+
+    async def _enrich_instagram_views(self, extracted: VideoExtract) -> VideoExtract:
+        from app.integrations.instagram.graph import fetch_views_for_reel_url
+
+        settings = get_settings()
+        token = settings.instagram_access_token
+        if not token:
+            return extracted
+
+        try:
+            views = await fetch_views_for_reel_url(token, extracted.url)
+        except Exception:
+            return extracted
+
+        if views is None:
+            return extracted
+
+        return VideoExtract(
+            platform=extracted.platform,
+            url=extracted.url,
+            platform_content_id=extracted.platform_content_id,
+            creator_name=extracted.creator_name,
+            title=extracted.title,
+            description=extracted.description,
+            transcript=extracted.transcript,
+            transcript_segments=extracted.transcript_segments,
+            views=views,
+            likes=extracted.likes,
+            comments=extracted.comments,
+            upload_date=extracted.upload_date,
+            hashtags=extracted.hashtags,
+            engagement_rate=compute_engagement_rate(
+                views, extracted.likes, extracted.comments
+            ),
+            duration_sec=extracted.duration_sec,
+            thumbnail_url=extracted.thumbnail_url,
+        )
 
     async def extract_youtube(self, url: str) -> VideoExtract:
         return await self.extract(url, Platform.YOUTUBE)

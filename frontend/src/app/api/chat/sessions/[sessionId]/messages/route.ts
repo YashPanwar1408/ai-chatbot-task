@@ -13,7 +13,16 @@ export async function POST(
       body: JSON.stringify(body),
     });
 
-    const data = await response.json();
+    const raw = await response.text();
+    let data: { detail?: string } = {};
+    try {
+      data = raw ? (JSON.parse(raw) as { detail?: string }) : {};
+    } catch {
+      return NextResponse.json(
+        { detail: raw.slice(0, 200) || "Invalid backend response" },
+        { status: response.status || 502 },
+      );
+    }
     if (!response.ok) {
       return NextResponse.json(
         { detail: data.detail ?? "Failed to send message" },
@@ -21,7 +30,7 @@ export async function POST(
       );
     }
 
-    return NextResponse.json(data);
+    return NextResponse.json(JSON.parse(raw));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Backend unreachable";
     return NextResponse.json({ detail: message }, { status: 502 });

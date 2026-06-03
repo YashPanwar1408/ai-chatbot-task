@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from uuid import UUID
@@ -30,12 +31,28 @@ class RunService:
 
     async def get_run(self, org_id: UUID, run_id: UUID) -> AnalysisRun:
         result = await self._session.execute(
-            select(AnalysisRun).where(AnalysisRun.id == run_id, AnalysisRun.org_id == org_id)
+            select(AnalysisRun)
+            .where(AnalysisRun.id == run_id, AnalysisRun.org_id == org_id)
+            .execution_options(populate_existing=True)
         )
         run = result.scalar_one_or_none()
         if run is None:
             raise NotFoundError("analysis_run", str(run_id))
         return run
+
+    async def _get_run_status_fresh(self, org_id: UUID, run_id: UUID) -> AnalysisRun:
+        """Read run status outside the request session to avoid stale identity-map cache during SSE."""
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(AnalysisRun).where(
+                    AnalysisRun.id == run_id,
+                    AnalysisRun.org_id == org_id,
+                )
+            )
+            run = result.scalar_one_or_none()
+            if run is None:
+                raise NotFoundError("analysis_run", str(run_id))
+            return run
 
     async def create_chat_session(self, org_id: UUID, data: ChatSessionCreate) -> AnalysisRun:
         session = AnalysisRun(
@@ -49,6 +66,7 @@ class RunService:
         )
         self._session.add(session)
         await self._session.flush()
+        await self._session.refresh(session)
         return session
 
     async def send_chat_message(
@@ -122,33 +140,91 @@ class RunService:
         await self._redis.connect()
 
         cursor = last_event_id or "0"
-        idle_ticks = 0
-        while idle_ticks < 6:
+        seen_terminal_event = False
+        last_heartbeat_at = time.monotonic()
+        heartbeat_interval_s = 15.0
+
+        while True:
             events = await self._redis.read_stream(
                 run_id,
                 last_id=cursor,
                 block_ms=3000,
                 count=50,
             )
-            if not events:
-                idle_ticks += 1
-                run = await self.get_run(org_id, run_id)
-                if run.status in {AnalysisRunStatus.COMPLETED, AnalysisRunStatus.FAILED}:
+            if events:
+                for message_id, fields in events:
+                    cursor = message_id
+                    payload_raw = fields.get("payload", "{}")
+                    payload = json.loads(payload_raw)
+                    event_name = payload.pop("event", "status")
+                    try:
+                        event_type = StreamEventType(event_name)
+                    except ValueError:
+                        event_type = StreamEventType.STATUS
+                    if event_type in {StreamEventType.DONE, StreamEventType.ERROR}:
+                        seen_terminal_event = True
+                    yield StreamEvent(event=event_type, data=payload)
+
+                last_heartbeat_at = time.monotonic()
+                if seen_terminal_event:
                     break
                 continue
 
-            idle_ticks = 0
-            for message_id, fields in events:
-                cursor = message_id
-                payload_raw = fields.get("payload", "{}")
-                payload = json.loads(payload_raw)
-                event_name = payload.pop("event", "status")
-                try:
-                    event_type = StreamEventType(event_name)
-                except ValueError:
-                    event_type = StreamEventType.STATUS
-                yield StreamEvent(event=event_type, data=payload)
-
-            run = await self.get_run(org_id, run_id)
+            run = await self._get_run_status_fresh(org_id, run_id)
             if run.status in {AnalysisRunStatus.COMPLETED, AnalysisRunStatus.FAILED}:
+                # Drain any buffered Redis events without blocking to avoid racing the
+                # DB status update vs the terminal SSE event.
+                remaining = await self._redis.read_stream(
+                    run_id,
+                    last_id=cursor,
+                    block_ms=0,
+                    count=200,
+                )
+                if remaining:
+                    for message_id, fields in remaining:
+                        cursor = message_id
+                        payload_raw = fields.get("payload", "{}")
+                        payload = json.loads(payload_raw)
+                        event_name = payload.pop("event", "status")
+                        try:
+                            event_type = StreamEventType(event_name)
+                        except ValueError:
+                            event_type = StreamEventType.STATUS
+                        if event_type in {StreamEventType.DONE, StreamEventType.ERROR}:
+                            seen_terminal_event = True
+                        yield StreamEvent(event=event_type, data=payload)
+                    if seen_terminal_event:
+                        break
+
+                # If the run is terminal but we never observed a terminal stream event,
+                # synthesize one so the UI can reliably finish.
+                if not seen_terminal_event:
+                    if run.status == AnalysisRunStatus.COMPLETED:
+                        answer = None
+                        if run.result_summary and isinstance(run.result_summary, dict):
+                            answer = run.result_summary.get("answer")
+                        yield StreamEvent(
+                            event=StreamEventType.DONE,
+                            data={
+                                "run_id": str(run_id),
+                                "status": run.status.value,
+                                "answer": answer,
+                            },
+                        )
+                    else:
+                        yield StreamEvent(
+                            event=StreamEventType.ERROR,
+                            data={
+                                "run_id": str(run_id),
+                                "status": run.status.value,
+                                "message": run.error or "Run failed",
+                            },
+                        )
                 break
+
+            # Keep the connection active during long silent phases (e.g. grading,
+            # extraction, long LLM latency) without impacting UI behavior.
+            now = time.monotonic()
+            if now - last_heartbeat_at >= heartbeat_interval_s:
+                last_heartbeat_at = now
+                yield StreamEvent(event=StreamEventType.METRIC, data={"type": "heartbeat"})
