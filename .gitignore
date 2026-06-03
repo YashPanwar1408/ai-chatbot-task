@@ -65,12 +65,7 @@ lerna-debug.log*
 *.pfx
 
 # Interview / screening files (keep locally but don't commit)
-ARCHITECTURE.md
+
 COMMIT_HISTORY.md
 DEPLOYMENT.md
 INTERVIEW_GUIDE.md
-SCALABILITY.md
-SYSTEM_DESIGN.md
-TRADEOFFS.md
-README.md
-.env.example

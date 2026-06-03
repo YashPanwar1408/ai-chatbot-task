@@ -293,9 +293,9 @@ After ingesting URLs on the dashboard:
 
 | Screen | Description |
 |--------|-------------|
-| ![Homepage](./docs/screenshots/homepage.png) | URL input for YouTube Short + Instagram Reel |
+| ![Homepage](./docs/screenshots/home_page.png) | URL input for YouTube Short + Instagram Reel |
 | ![Dashboard](./docs/screenshots/dashboard.png) | Side-by-side metrics cards |
-| ![Chat](./docs/screenshots/chat-streaming.png) | Streaming response with citations |
+| ![Chat](./docs/screenshots/chat_streaming.png) | Streaming response with citations |
 
 > Add screenshots to `docs/screenshots/` before submission.
 
